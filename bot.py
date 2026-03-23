@@ -1,13 +1,31 @@
 import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InputFile
-from config import TOKEN, ADMIN_ID
-import db
+from config import TOKEN
+import os
 
 bot = Bot(token=TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(bot)
 
-db.init_db()
+PORT = int(os.environ.get("PORT", 10000))  # Render назначает порт
+
+async def on_startup(dp):
+    webhook_url = f"https://ТВОЙ-URL.onrender.com/webhook"
+    await bot.set_webhook(webhook_url)
+
+async def on_shutdown(dp):
+    await bot.delete_webhook()
+
+if __name__ == "__main__":
+    from aiogram.utils.executor import start_webhook
+    start_webhook(
+        dispatcher=dp,
+        webhook_path=f"/webhook/{TOKEN}",
+        on_startup=on_startup,
+        on_shutdown=on_shutdown,
+        skip_updates=True,
+        host="0.0.0.0",
+        port=PORT
+    )
 
 # --- КНОПКИ ---
 def main_menu():
