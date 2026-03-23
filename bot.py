@@ -1,15 +1,16 @@
 import os
-import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiohttp import web
-import db
-from config import TOKEN, ADMIN_ID
-
+from aiogram import Bot
+from config import TOKEN
 bot = Bot(token=TOKEN)
-dp = Dispatcher()
 
-db.init_db()
+WEBHOOK_URL = f"https://poputka-1.onrender.com/{TOKEN}"
+
+import asyncio
+async def set_webhook():
+    await bot.set_webhook(WEBHOOK_URL)
+    print(f"Webhook установлен: {WEBHOOK_URL}")
+
+asyncio.run(set_webhook())
 
 # ------------------ КНОПКИ ------------------
 def main_menu():
