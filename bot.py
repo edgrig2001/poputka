@@ -1,13 +1,13 @@
 import os
 import sqlite3
 import threading
+from datetime import datetime, timedelta
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler,
     MessageHandler, filters
 )
-
 # ---------------- Настройки ----------------
 ADMIN_ID = 869818784
 DONATE_URL = "https://t.me/grigelav"  # ссылка или QR на оплату
@@ -15,7 +15,6 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")  # токен бота через Render
 
 # ---------------- Flask ----------------
 app_web = Flask(__name__)
-
 @app_web.route("/")
 def home():
     return "✅ Попутка Бот Работает"
@@ -28,11 +27,13 @@ def run_web():
 conn = sqlite3.connect("rides.db", check_same_thread=False)
 cursor = conn.cursor()
 
+# Таблицы
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS rides (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     route TEXT,
+    date TEXT,
     time TEXT,
     seats_total INTEGER,
     seats_taken INTEGER DEFAULT 0,
@@ -60,23 +61,55 @@ CREATE TABLE IF NOT EXISTS reports (
 """)
 conn.commit()
 
+# ---------------- Состояние пользователей ----------------
 user_state = {}
 
-# ---------------- Главное меню ----------------
-def main_keyboard():
+# ---------------- Клавиатуры ----------------
+def main_menu(user_id=None):
+    kb = []
+    kb.append([InlineKeyboardButton("➕ Предложить поездку", callback_data="add")])
+    kb.append([InlineKeyboardButton("🚗 Найти поездку", callback_data="find")])
+    kb.append([InlineKeyboardButton("📋 Мои поездки", callback_data="my")])
+    kb.append([InlineKeyboardButton("⭐ Оценить поездку", callback_data="rate")])
+    kb.append([InlineKeyboardButton("🚨 Пожаловаться", callback_data="report")])
+    kb.append([InlineKeyboardButton("💰 Повысить приоритет", url=DONATE_URL)])
+    if user_id == ADMIN_ID:
+        kb.append([InlineKeyboardButton("👑 Админка", callback_data="admin")])
+    return InlineKeyboardMarkup(kb)
+
+def route_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Предложить поездку", callback_data="add")],
-        [InlineKeyboardButton("🚗 Найти поездку", callback_data="find")],
-        [InlineKeyboardButton("📋 Мои объявления", callback_data="my")],
-        [InlineKeyboardButton("⭐ Оценить поездку", callback_data="rate")],
-        [InlineKeyboardButton("🚨 Пожаловаться", callback_data="report")],
-        [InlineKeyboardButton("👑 Админка", callback_data="admin") if True else None]  # отображаем только админу
+        [InlineKeyboardButton("Челны → Казань", callback_data="route_chkaz")],
+        [InlineKeyboardButton("Казань → Челны", callback_data="route_kazch")],
+        [InlineKeyboardButton("Отмена", callback_data="menu")]
     ])
+
+def seats_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(str(i), callback_data=f"seats_{i}") for i in range(1,5)],
+        [InlineKeyboardButton("Отмена", callback_data="menu")]
+    ])
+
+def date_kb():
+    kb = []
+    today = datetime.now()
+    for i in range(0, 3):  # следующие 3 дня
+        day = today + timedelta(days=i)
+        kb.append([InlineKeyboardButton(day.strftime("%d.%m"), callback_data=f"date_{day.strftime('%Y-%m-%d')}")])
+    kb.append([InlineKeyboardButton("Отмена", callback_data="menu")])
+    return InlineKeyboardMarkup(kb)
+
+def time_kb():
+    kb = []
+    for h in range(8, 23, 2):
+        kb.append([InlineKeyboardButton(f"{h}:00", callback_data=f"time_{h}:00")])
+    kb.append([InlineKeyboardButton("Отмена", callback_data="menu")])
+    return InlineKeyboardMarkup(kb)
 
 # ---------------- Команды ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat.id
-    await update.message.reply_text("🚗 Попутка Челны ↔ Казань", reply_markup=main_keyboard())
+    await update.message.reply_text("🚗 Попутка Челны ↔ Казань", reply_markup=main_menu(chat_id))
 
 # ---------------- CallbackHandler ----------------
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -84,123 +117,104 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     chat_id = query.from_user.id
     data = query.data
+    state = user_state.get(chat_id, {})
 
     # Главное меню
     if data == "menu":
-        await query.edit_message_text("🏠 Главное меню:", reply_markup=main_keyboard())
+        user_state.pop(chat_id, None)
+        await query.edit_message_text("🏠 Главное меню:", reply_markup=main_menu(chat_id))
+        return
 
-    # Добавить поездку
-    elif data == "add":
-        user_state[chat_id] = {"step": "route"}
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Челны → Казань", callback_data="route_chkaz")],
-            [InlineKeyboardButton("Казань → Челны", callback_data="route_kazch")],
-            [InlineKeyboardButton("Отмена", callback_data="menu")]
-        ])
-        await query.edit_message_text("Выберите маршрут:", reply_markup=keyboard)
+    # Добавление поездки
+    if data == "add":
+        user_state[chat_id] = {"step":"route"}
+        await query.edit_message_text("Выберите маршрут:", reply_markup=route_kb())
+        return
 
-    elif data in ["route_chkaz", "route_kazch"]:
-        route = "Челны → Казань" if data=="route_chkaz" else "Казань → Челны"
-        user_state[chat_id]["route"] = route
-        user_state[chat_id]["step"] = "time"
-        await query.edit_message_text("Введите время отправления (например 18:00):")
+    # Выбор маршрута
+    if data in ["route_chkaz", "route_kazch"]:
+        state["route"] = "Челны → Казань" if data=="route_chkaz" else "Казань → Челны"
+        state["step"] = "date"
+        user_state[chat_id] = state
+        await query.edit_message_text("Выберите дату:", reply_markup=date_kb())
+        return
 
-    elif data == "skip_photo":
-        state = user_state.get(chat_id)
-        if state:
-            # Сохраняем поездку без фото
-            cursor.execute(
-                "INSERT INTO rides (user_id, route, time, seats_total, price) VALUES (?,?,?,?,?)",
-                (chat_id, state["route"], state["time"], state["seats"], state["price"])
-            )
-            conn.commit()
-            await query.edit_message_text("✅ Объявление создано!", reply_markup=main_keyboard())
-            user_state.pop(chat_id)
+    # Выбор даты
+    if data.startswith("date_"):
+        state["date"] = data[5:]
+        state["step"] = "time"
+        user_state[chat_id] = state
+        await query.edit_message_text("Выберите время отправления:", reply_markup=time_kb())
+        return
 
-    # Найти поездку
-    elif data == "find":
-        rides = cursor.execute("SELECT * FROM rides ORDER BY id DESC LIMIT 10").fetchall()
-        if not rides:
-            await query.edit_message_text("Поездок пока нет", reply_markup=main_keyboard())
-            return
-        for r in rides:
-            text = f"🚗 {r[2]}\n🕒 {r[3]}\n💺 {r[6]}/{r[4]}\n💰 {r[5]}"
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"💺 Забронировать {r[0]}", callback_data=f"book_{r[0]}")]])
-            if r[7]:
-                await context.bot.send_photo(chat_id, r[7], caption=text, reply_markup=kb)
-            else:
-                await query.edit_message_text(text, reply_markup=kb)
+    # Выбор времени
+    if data.startswith("time_"):
+        state["time"] = data[5:]
+        state["step"] = "seats"
+        user_state[chat_id] = state
+        await query.edit_message_text("Выберите количество мест:", reply_markup=seats_kb())
+        return
 
-    # Забронировать место
-    elif data.startswith("book_"):
-        ride_id = int(data.split("_")[1])
-        ride = cursor.execute("SELECT seats_total, seats_taken, user_id FROM rides WHERE id=?", (ride_id,)).fetchone()
-        if not ride:
-            await query.edit_message_text("Ошибка бронирования")
-            return
-        seats_total, seats_taken, driver_id = ride
-        if seats_taken >= seats_total:
-            await query.edit_message_text("❌ Все места заняты")
-            return
-        cursor.execute("UPDATE rides SET seats_taken = seats_taken+1 WHERE id=?", (ride_id,))
-        conn.commit()
-        await query.edit_message_text("✅ Место забронировано!")
-        await context.bot.send_message(driver_id, f"💬 @{query.from_user.username} забронировал(-а) у вас место в поездке {ride_id}")
+    # Выбор мест
+    if data.startswith("seats_"):
+        state["seats"] = int(data[6:])
+        state["step"] = "price"
+        user_state[chat_id] = state
+        await query.edit_message_text("Введите цену (или 'договорная'):")
+        return
 
-# ---------------- Обработка сообщений ----------------
+# ---------------- Сообщения ----------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat.id
     state = user_state.get(chat_id, {})
     step = state.get("step")
-
-    if not step:
-        await update.message.reply_text("🏠 Главное меню", reply_markup=main_keyboard())
-        return
-
     text = update.message.text
 
-    if step == "time":
-        state["time"] = text
-        state["step"] = "seats"
-        await update.message.reply_text("Сколько мест? (1-4)")
+    if not step:
+        await update.message.reply_text("🏠 Главное меню", reply_markup=main_menu(chat_id))
+        return
 
-    elif step == "seats":
-        try:
-            seats = int(text)
-            if seats <1 or seats>4:
-                await update.message.reply_text("Введите число от 1 до 4")
-                return
-            state["seats"] = seats
-            state["step"] = "price"
-            await update.message.reply_text("Цена (или договорная):")
-        except:
-            await update.message.reply_text("Введите число")
-            return
-
-    elif step == "price":
+    # Ввод цены
+    if step == "price":
         state["price"] = text
         state["step"] = "photo"
-        await update.message.reply_text("Можно прикрепить фото (отправьте фото) или пропустить командой /skip")
+        user_state[chat_id] = state
+        await update.message.reply_text("Можно отправить фото или пропустить командой /skip")
+        return
 
-    elif step == "photo" and update.message.photo:
+    # Фото
+    if step == "photo" and update.message.photo:
         file_id = update.message.photo[-1].file_id
         state["photo"] = file_id
         cursor.execute(
-            "INSERT INTO rides (user_id, route, time, seats_total, price, photo) VALUES (?,?,?,?,?,?)",
-            (chat_id, state["route"], state["time"], state["seats"], state["price"], file_id)
+            "INSERT INTO rides (user_id, route, date, time, seats_total, price, photo) VALUES (?,?,?,?,?,?,?)",
+            (chat_id, state["route"], state["date"], state["time"], state["seats"], state["price"], file_id)
         )
         conn.commit()
-        await update.message.reply_text("✅ Объявление создано!", reply_markup=main_keyboard())
+        await update.message.reply_text("✅ Объявление создано!", reply_markup=main_menu(chat_id))
+        user_state.pop(chat_id)
+        return
+
+# Пропустить фото
+async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat.id
+    state = user_state.get(chat_id)
+    if state and state.get("step")=="photo":
+        cursor.execute(
+            "INSERT INTO rides (user_id, route, date, time, seats_total, price) VALUES (?,?,?,?,?,?)",
+            (chat_id, state["route"], state["date"], state["time"], state["seats"], state["price"])
+        )
+        conn.commit()
+        await update.message.reply_text("✅ Объявление создано!", reply_markup=main_menu(chat_id))
         user_state.pop(chat_id)
 
 # ---------------- Запуск ----------------
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
-
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("skip", skip_photo))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-
     print("🚀 Бот запущен")
     app.run_polling()
