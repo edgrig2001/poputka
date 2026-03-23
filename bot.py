@@ -1,32 +1,18 @@
-import os
-from aiogram import Bot, Dispatcher, types
-from config import TOKEN
 import asyncio
+from aiogram import Bot, Dispatcher
+from config import TOKEN
+import db
 
 bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher()  # <-- убрал передачу bot
 
-PORT = int(os.environ.get("PORT", 10000))  # Render назначает порт
+db.init_db()
 
-async def on_startup(dp):
-    webhook_url = f"https://ТВОЙ-URL.onrender.com/webhook"
-    await bot.set_webhook(webhook_url)
-
-async def on_shutdown(dp):
-    await bot.delete_webhook()
+async def main():
+    await dp.start_polling(bot, skip_updates=True)  # Bot передаём здесь
 
 if __name__ == "__main__":
-    from aiogram.utils.executor import start_webhook
-
-    start_webhook(
-        dispatcher=dp,
-        webhook_path=f"/webhook/{TOKEN}",
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
-        skip_updates=True,
-        host="0.0.0.0",
-        port=PORT
-    )
+    asyncio.run(main())
 # --- КНОПКИ ---
 def main_menu():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
