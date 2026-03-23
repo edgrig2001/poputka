@@ -1,12 +1,13 @@
 import os
 import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InputFile
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiohttp import web
+import db
 from config import TOKEN, ADMIN_ID
-import db  # твоя база данных с таблицами rides, ratings, reports
 
 bot = Bot(token=TOKEN)
-dp = Dispatcher()  # aiogram 3.x
+dp = Dispatcher()
 
 db.init_db()
 
@@ -30,11 +31,6 @@ def seats_kb(max_seats):
     kb.add("⬅️ Назад")
     return kb
 
-def yes_no_kb():
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("✅ Да", "❌ Нет")
-    return kb
-
 def priority_kb(ride_id):
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(f"🚀 Поднять объявление {ride_id}", "⬅️ Назад")
@@ -45,15 +41,13 @@ def confirm_payment_kb(ride_id):
     kb.add(f"✅ Оплата сделана {ride_id}", "⬅️ Назад")
     return kb
 
-# ------------------ ДАННЫЕ ------------------
 user_data = {}
 
-# ------------------ СТАРТ ------------------
+# ------------------ Хендлеры ------------------
 @dp.message(lambda msg: msg.text == "/start")
 async def start(msg: types.Message):
     await msg.answer("🚗 Попутка Челны ↔ Казань", reply_markup=main_menu())
 
-# ------------------ ПРЕДЛОЖИТЬ ПОЕЗДКУ ------------------
 @dp.message(lambda msg: msg.text == "➕ Предложить поездку")
 async def create_ride(msg: types.Message):
     await msg.answer("Выберите маршрут:", reply_markup=routes_kb())
@@ -91,7 +85,6 @@ async def handle_input(msg: types.Message):
         await msg.answer("Можно прикрепить фото авто/себя. Отправьте фото или /skip")
         return
 
-# ------------------ Фото ------------------
 @dp.message(lambda msg: msg.photo)
 async def handle_photo(msg: types.Message):
     user = user_data.get(msg.from_user.id)
@@ -101,19 +94,11 @@ async def handle_photo(msg: types.Message):
         db.cursor.execute("""
             INSERT INTO rides (user_id, route, time, seats_total, price, photo, seats_taken, priority)
             VALUES (?, ?, ?, ?, ?, ?, 0, 0)
-        """, (
-            msg.from_user.id,
-            user["route"],
-            user["time"],
-            user["seats"],
-            user["price"],
-            file_id
-        ))
+        """, (msg.from_user.id, user["route"], user["time"], user["seats"], user["price"], file_id))
         db.conn.commit()
         await msg.answer("✅ Объявление создано!", reply_markup=main_menu())
         user_data.pop(msg.from_user.id)
 
-# ------------------ Пропустить фото ------------------
 @dp.message(lambda msg: msg.text == "/skip")
 async def skip_photo(msg: types.Message):
     user = user_data.get(msg.from_user.id)
@@ -121,18 +106,11 @@ async def skip_photo(msg: types.Message):
         db.cursor.execute("""
             INSERT INTO rides (user_id, route, time, seats_total, price, seats_taken, priority)
             VALUES (?, ?, ?, ?, ?, 0, 0)
-        """, (
-            msg.from_user.id,
-            user["route"],
-            user["time"],
-            user["seats"],
-            user["price"]
-        ))
+        """, (msg.from_user.id, user["route"], user["time"], user["seats"], user["price"]))
         db.conn.commit()
         await msg.answer("✅ Объявление создано!", reply_markup=main_menu())
         user_data.pop(msg.from_user.id)
 
-# ------------------ ПОИСК ------------------
 @dp.message(lambda msg: msg.text == "🚗 Найти поездку")
 async def find_rides(msg: types.Message):
     db.cursor.execute("SELECT * FROM rides ORDER BY priority DESC, id DESC LIMIT 10")
@@ -140,7 +118,6 @@ async def find_rides(msg: types.Message):
     if not rides:
         await msg.answer("Поездок пока нет")
         return
-
     for r in rides:
         text = f"🚗 {r[2]}\n🕒 {r[3]}\n💺 {r[5]}/{r[4]}\n💰 {r[6]}"
         if r[7]:
@@ -152,7 +129,6 @@ async def find_rides(msg: types.Message):
         kb.add(f"🚀 Поднять объявление {r[0]}")
         await msg.answer("Выберите действие:", reply_markup=kb)
 
-# ------------------ БРОНИРОВАНИЕ ------------------
 @dp.message(lambda msg: msg.text.startswith("💺 Забронировать"))
 async def book_seat(msg: types.Message):
     ride_id = int(msg.text.split()[-1])
@@ -170,11 +146,9 @@ async def book_seat(msg: types.Message):
     await msg.answer("✅ Вы забронировали место!")
     await bot.send_message(driver_id, f"💬 @{msg.from_user.username} забронировал(-а) у вас место в поездке {ride_id}")
 
-# ------------------ ПОДНЯТЬ ОБЪЯВЛЕНИЕ / ОПЛАТА ------------------
 @dp.message(lambda msg: msg.text.startswith("🚀 Поднять объявление"))
 async def raise_priority(msg: types.Message):
     ride_id = int(msg.text.split()[-1])
-    # Отправляем ссылку на оплату (QR/ссылка на карту)
     await msg.answer(
         "💰 Оплатите 100 ₽ для поднятия объявления.\n"
         "Ссылка/QR: https://example.com/your-payment-link\n"
@@ -189,15 +163,13 @@ async def confirm_payment(msg: types.Message):
     db.conn.commit()
     await msg.answer("✅ Объявление поднято и стало срочным!")
 
-# ------------------ ПРОФИЛЬ ------------------
 @dp.message(lambda msg: msg.text == "👤 Профиль")
 async def profile(msg: types.Message):
     db.cursor.execute("SELECT AVG(rating) FROM ratings WHERE user_id=?", (msg.from_user.id,))
     rating = db.cursor.fetchone()[0]
-    rating = round(rating,1) if rating else 0
+    rating = round(rating, 1) if rating else 0
     await msg.answer(f"⭐ Ваш рейтинг: {rating}")
 
-# ------------------ МОИ ОБЪЯВЛЕНИЯ ------------------
 @dp.message(lambda msg: msg.text == "📋 Мои объявления")
 async def my_rides(msg: types.Message):
     db.cursor.execute("SELECT * FROM rides WHERE user_id=? ORDER BY id DESC", (msg.from_user.id,))
@@ -209,21 +181,19 @@ async def my_rides(msg: types.Message):
         text = f"🚗 {r[2]} 🕒 {r[3]} 💺 {r[5]}/{r[4]} 💰 {r[6]} (ID {r[0]})"
         await msg.answer(text)
 
-# ------------------ АДМИН ------------------
 @dp.message(lambda msg: msg.from_user.id == ADMIN_ID)
 async def admin_panel(msg: types.Message):
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("📋 Все объявления", "🚫 Бан/Разбан")
     await msg.answer("👑 Админ-панель", reply_markup=kb)
 
-# ------------------ ЖАЛОБЫ ------------------
 @dp.message(lambda msg: msg.text == "🚨 Пожаловаться")
 async def report(msg: types.Message):
     await msg.answer("Введите ID поездки и причину через пробел, например: 7 мошенник")
 
 @dp.message()
 async def handle_report(msg: types.Message):
-    if msg.text.count(" ") >=1:
+    if msg.text.count(" ") >= 1:
         parts = msg.text.split()
         ride_id = int(parts[0])
         reason = " ".join(parts[1:])
@@ -233,24 +203,25 @@ async def handle_report(msg: types.Message):
         await msg.answer("✅ Жалоба отправлена администратору")
         await bot.send_message(ADMIN_ID, f"🚨 Жалоба на поездку {ride_id} от @{msg.from_user.username}: {reason}")
 
-# ------------------ ЗАПУСК WEBHOOK ------------------
-PORT = int(os.environ.get("PORT", 10000))
-
-async def on_startup(dispatcher):
-    webhook_url = f"https://ТВОЙ-URL.onrender.com/webhook"
+# ------------------ WEBHOOK ------------------
+async def on_startup(app):
+    webhook_url = f"https://ТВОЙ-URL.onrender.com/webhook/{TOKEN}"
     await bot.set_webhook(webhook_url)
 
-async def on_shutdown(dispatcher):
+async def on_shutdown(app):
     await bot.delete_webhook()
 
+async def handle(request):
+    update = types.Update(**await request.json())
+    await dp.feed_update(update)
+    return web.Response()
+
+app = web.Application()
+app.router.add_post(f'/webhook/{TOKEN}', handle)
+app.on_startup.append(on_startup)
+app.on_shutdown.append(on_shutdown)
+
+PORT = int(os.environ.get("PORT", 10000))
+
 if __name__ == "__main__":
-    from aiogram.utils.executor import start_webhook
-    start_webhook(
-        dispatcher=dp,
-        webhook_path=f"/webhook/{TOKEN}",
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
-        skip_updates=True,
-        host="0.0.0.0",
-        port=PORT
-    )
+    web.run_app(app, host="0.0.0.0", port=PORT)
