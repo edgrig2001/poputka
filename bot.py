@@ -1,228 +1,206 @@
 import os
-from aiogram import Bot
-from config import TOKEN
-bot = Bot(token=TOKEN)
+import sqlite3
+import threading
+from flask import Flask
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler,
+    MessageHandler, filters
+)
 
-WEBHOOK_URL = f"https://poputka-1.onrender.com/{TOKEN}"
+# ---------------- Настройки ----------------
+ADMIN_ID = 123456789  # твой Telegram ID
+DONATE_URL = "https://t.me/pay"  # ссылка или QR на оплату
+BOT_TOKEN = os.environ.get("BOT_TOKEN")  # токен бота через Render Env
 
-import asyncio
-async def set_webhook():
-    await bot.set_webhook(WEBHOOK_URL)
-    print(f"Webhook установлен: {WEBHOOK_URL}")
+# ---------------- Flask ----------------
+app_web = Flask(__name__)
 
-asyncio.run(set_webhook())
+@app_web.route("/")
+def home():
+    return "✅ Попутка Бот Работает"
 
-# ------------------ КНОПКИ ------------------
-def main_menu():
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("🚗 Найти поездку", "➕ Предложить поездку")
-    kb.add("📋 Мои объявления", "👤 Профиль")
-    return kb
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app_web.run(host="0.0.0.0", port=port)
 
-def routes_kb():
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("Челны → Казань", "Казань → Челны")
-    kb.add("⬅️ Назад")
-    return kb
+# ---------------- База данных ----------------
+conn = sqlite3.connect("rides.db", check_same_thread=False)
+cursor = conn.cursor()
 
-def seats_kb(max_seats):
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    for i in range(1, max_seats+1):
-        kb.add(str(i))
-    kb.add("⬅️ Назад")
-    return kb
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS rides (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    route TEXT,
+    time TEXT,
+    seats_total INTEGER,
+    seats_taken INTEGER DEFAULT 0,
+    price TEXT,
+    photo TEXT
+)
+""")
 
-def priority_kb(ride_id):
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(f"🚀 Поднять объявление {ride_id}", "⬅️ Назад")
-    return kb
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS ratings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ride_id INTEGER,
+    user_id INTEGER,
+    rating INTEGER
+)
+""")
 
-def confirm_payment_kb(ride_id):
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(f"✅ Оплата сделана {ride_id}", "⬅️ Назад")
-    return kb
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ride_id INTEGER,
+    reporter_id INTEGER,
+    reason TEXT
+)
+""")
+conn.commit()
 
-user_data = {}
+user_state = {}
 
-# ------------------ Хендлеры ------------------
-@dp.message(lambda msg: msg.text == "/start")
-async def start(msg: types.Message):
-    await msg.answer("🚗 Попутка Челны ↔ Казань", reply_markup=main_menu())
+# ---------------- Главное меню ----------------
+def main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Предложить поездку", callback_data="add")],
+        [InlineKeyboardButton("🚗 Найти поездку", callback_data="find")],
+        [InlineKeyboardButton("📋 Мои объявления", callback_data="my")],
+        [InlineKeyboardButton("⭐ Оценить поездку", callback_data="rate")],
+        [InlineKeyboardButton("🚨 Пожаловаться", callback_data="report")],
+        [InlineKeyboardButton("👑 Админка", callback_data="admin") if True else None]  # отображаем только админу
+    ])
 
-@dp.message(lambda msg: msg.text == "➕ Предложить поездку")
-async def create_ride(msg: types.Message):
-    await msg.answer("Выберите маршрут:", reply_markup=routes_kb())
+# ---------------- Команды ----------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat.id
+    await update.message.reply_text("🚗 Попутка Челны ↔ Казань", reply_markup=main_keyboard())
 
-@dp.message(lambda msg: msg.text in ["Челны → Казань", "Казань → Челны"])
-async def set_route(msg: types.Message):
-    user_data[msg.from_user.id] = {"route": msg.text}
-    await msg.answer("Введите время (например 18:00):")
+# ---------------- CallbackHandler ----------------
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.from_user.id
+    data = query.data
 
-@dp.message()
-async def handle_input(msg: types.Message):
-    user = user_data.get(msg.from_user.id)
-    if not user:
+    # Главное меню
+    if data == "menu":
+        await query.edit_message_text("🏠 Главное меню:", reply_markup=main_keyboard())
+
+    # Добавить поездку
+    elif data == "add":
+        user_state[chat_id] = {"step": "route"}
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Челны → Казань", callback_data="route_chkaz")],
+            [InlineKeyboardButton("Казань → Челны", callback_data="route_kazch")],
+            [InlineKeyboardButton("Отмена", callback_data="menu")]
+        ])
+        await query.edit_message_text("Выберите маршрут:", reply_markup=keyboard)
+
+    elif data in ["route_chkaz", "route_kazch"]:
+        route = "Челны → Казань" if data=="route_chkaz" else "Казань → Челны"
+        user_state[chat_id]["route"] = route
+        user_state[chat_id]["step"] = "time"
+        await query.edit_message_text("Введите время отправления (например 18:00):")
+
+    elif data == "skip_photo":
+        state = user_state.get(chat_id)
+        if state:
+            # Сохраняем поездку без фото
+            cursor.execute(
+                "INSERT INTO rides (user_id, route, time, seats_total, price) VALUES (?,?,?,?,?)",
+                (chat_id, state["route"], state["time"], state["seats"], state["price"])
+            )
+            conn.commit()
+            await query.edit_message_text("✅ Объявление создано!", reply_markup=main_keyboard())
+            user_state.pop(chat_id)
+
+    # Найти поездку
+    elif data == "find":
+        rides = cursor.execute("SELECT * FROM rides ORDER BY id DESC LIMIT 10").fetchall()
+        if not rides:
+            await query.edit_message_text("Поездок пока нет", reply_markup=main_keyboard())
+            return
+        for r in rides:
+            text = f"🚗 {r[2]}\n🕒 {r[3]}\n💺 {r[6]}/{r[4]}\n💰 {r[5]}"
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"💺 Забронировать {r[0]}", callback_data=f"book_{r[0]}")]])
+            if r[7]:
+                await context.bot.send_photo(chat_id, r[7], caption=text, reply_markup=kb)
+            else:
+                await query.edit_message_text(text, reply_markup=kb)
+
+    # Забронировать место
+    elif data.startswith("book_"):
+        ride_id = int(data.split("_")[1])
+        ride = cursor.execute("SELECT seats_total, seats_taken, user_id FROM rides WHERE id=?", (ride_id,)).fetchone()
+        if not ride:
+            await query.edit_message_text("Ошибка бронирования")
+            return
+        seats_total, seats_taken, driver_id = ride
+        if seats_taken >= seats_total:
+            await query.edit_message_text("❌ Все места заняты")
+            return
+        cursor.execute("UPDATE rides SET seats_taken = seats_taken+1 WHERE id=?", (ride_id,))
+        conn.commit()
+        await query.edit_message_text("✅ Место забронировано!")
+        await context.bot.send_message(driver_id, f"💬 @{query.from_user.username} забронировал(-а) у вас место в поездке {ride_id}")
+
+# ---------------- Обработка сообщений ----------------
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat.id
+    state = user_state.get(chat_id, {})
+    step = state.get("step")
+
+    if not step:
+        await update.message.reply_text("🏠 Главное меню", reply_markup=main_keyboard())
         return
 
-    if "time" not in user:
-        user["time"] = msg.text
-        await msg.answer("Сколько мест? (1-4)", reply_markup=seats_kb(4))
-        return
+    text = update.message.text
 
-    if "seats" not in user:
+    if step == "time":
+        state["time"] = text
+        state["step"] = "seats"
+        await update.message.reply_text("Сколько мест? (1-4)")
+
+    elif step == "seats":
         try:
-            seats = int(msg.text)
-            if seats < 1 or seats > 4:
-                await msg.answer("Введите число от 1 до 4")
+            seats = int(text)
+            if seats <1 or seats>4:
+                await update.message.reply_text("Введите число от 1 до 4")
                 return
-            user["seats"] = seats
-            await msg.answer("Введите цену (или 'договорная'):")
+            state["seats"] = seats
+            state["step"] = "price"
+            await update.message.reply_text("Цена (или договорная):")
         except:
-            await msg.answer("Введите число")
-        return
+            await update.message.reply_text("Введите число")
+            return
 
-    if "price" not in user:
-        user["price"] = msg.text
-        await msg.answer("Можно прикрепить фото авто/себя. Отправьте фото или /skip")
-        return
+    elif step == "price":
+        state["price"] = text
+        state["step"] = "photo"
+        await update.message.reply_text("Можно прикрепить фото (отправьте фото) или пропустить командой /skip")
 
-@dp.message(lambda msg: msg.photo)
-async def handle_photo(msg: types.Message):
-    user = user_data.get(msg.from_user.id)
-    if user and "price" in user and "photo" not in user:
-        file_id = msg.photo[-1].file_id
-        user["photo"] = file_id
-        db.cursor.execute("""
-            INSERT INTO rides (user_id, route, time, seats_total, price, photo, seats_taken, priority)
-            VALUES (?, ?, ?, ?, ?, ?, 0, 0)
-        """, (msg.from_user.id, user["route"], user["time"], user["seats"], user["price"], file_id))
-        db.conn.commit()
-        await msg.answer("✅ Объявление создано!", reply_markup=main_menu())
-        user_data.pop(msg.from_user.id)
+    elif step == "photo" and update.message.photo:
+        file_id = update.message.photo[-1].file_id
+        state["photo"] = file_id
+        cursor.execute(
+            "INSERT INTO rides (user_id, route, time, seats_total, price, photo) VALUES (?,?,?,?,?,?)",
+            (chat_id, state["route"], state["time"], state["seats"], state["price"], file_id)
+        )
+        conn.commit()
+        await update.message.reply_text("✅ Объявление создано!", reply_markup=main_keyboard())
+        user_state.pop(chat_id)
 
-@dp.message(lambda msg: msg.text == "/skip")
-async def skip_photo(msg: types.Message):
-    user = user_data.get(msg.from_user.id)
-    if user and "price" in user:
-        db.cursor.execute("""
-            INSERT INTO rides (user_id, route, time, seats_total, price, seats_taken, priority)
-            VALUES (?, ?, ?, ?, ?, 0, 0)
-        """, (msg.from_user.id, user["route"], user["time"], user["seats"], user["price"]))
-        db.conn.commit()
-        await msg.answer("✅ Объявление создано!", reply_markup=main_menu())
-        user_data.pop(msg.from_user.id)
-
-@dp.message(lambda msg: msg.text == "🚗 Найти поездку")
-async def find_rides(msg: types.Message):
-    db.cursor.execute("SELECT * FROM rides ORDER BY priority DESC, id DESC LIMIT 10")
-    rides = db.cursor.fetchall()
-    if not rides:
-        await msg.answer("Поездок пока нет")
-        return
-    for r in rides:
-        text = f"🚗 {r[2]}\n🕒 {r[3]}\n💺 {r[5]}/{r[4]}\n💰 {r[6]}"
-        if r[7]:
-            await bot.send_photo(msg.from_user.id, r[7], caption=text)
-        else:
-            await msg.answer(text)
-        kb = ReplyKeyboardMarkup(resize_keyboard=True)
-        kb.add(f"💺 Забронировать {r[0]}")
-        kb.add(f"🚀 Поднять объявление {r[0]}")
-        await msg.answer("Выберите действие:", reply_markup=kb)
-
-@dp.message(lambda msg: msg.text.startswith("💺 Забронировать"))
-async def book_seat(msg: types.Message):
-    ride_id = int(msg.text.split()[-1])
-    db.cursor.execute("SELECT seats_total, seats_taken, user_id FROM rides WHERE id=?", (ride_id,))
-    ride = db.cursor.fetchone()
-    if not ride:
-        await msg.answer("Ошибка")
-        return
-    seats_total, seats_taken, driver_id = ride
-    if seats_taken >= seats_total:
-        await msg.answer("❌ Все места заняты")
-        return
-    db.cursor.execute("UPDATE rides SET seats_taken = seats_taken+1 WHERE id=?", (ride_id,))
-    db.conn.commit()
-    await msg.answer("✅ Вы забронировали место!")
-    await bot.send_message(driver_id, f"💬 @{msg.from_user.username} забронировал(-а) у вас место в поездке {ride_id}")
-
-@dp.message(lambda msg: msg.text.startswith("🚀 Поднять объявление"))
-async def raise_priority(msg: types.Message):
-    ride_id = int(msg.text.split()[-1])
-    await msg.answer(
-        "💰 Оплатите 100 ₽ для поднятия объявления.\n"
-        "Ссылка/QR: https://example.com/your-payment-link\n"
-        "После оплаты нажмите кнопку ✅ Оплата сделана",
-        reply_markup=confirm_payment_kb(ride_id)
-    )
-
-@dp.message(lambda msg: msg.text.startswith("✅ Оплата сделана"))
-async def confirm_payment(msg: types.Message):
-    ride_id = int(msg.text.split()[-1])
-    db.cursor.execute("UPDATE rides SET priority=1 WHERE id=?", (ride_id,))
-    db.conn.commit()
-    await msg.answer("✅ Объявление поднято и стало срочным!")
-
-@dp.message(lambda msg: msg.text == "👤 Профиль")
-async def profile(msg: types.Message):
-    db.cursor.execute("SELECT AVG(rating) FROM ratings WHERE user_id=?", (msg.from_user.id,))
-    rating = db.cursor.fetchone()[0]
-    rating = round(rating, 1) if rating else 0
-    await msg.answer(f"⭐ Ваш рейтинг: {rating}")
-
-@dp.message(lambda msg: msg.text == "📋 Мои объявления")
-async def my_rides(msg: types.Message):
-    db.cursor.execute("SELECT * FROM rides WHERE user_id=? ORDER BY id DESC", (msg.from_user.id,))
-    rides = db.cursor.fetchall()
-    if not rides:
-        await msg.answer("У вас пока нет объявлений")
-        return
-    for r in rides:
-        text = f"🚗 {r[2]} 🕒 {r[3]} 💺 {r[5]}/{r[4]} 💰 {r[6]} (ID {r[0]})"
-        await msg.answer(text)
-
-@dp.message(lambda msg: msg.from_user.id == ADMIN_ID)
-async def admin_panel(msg: types.Message):
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("📋 Все объявления", "🚫 Бан/Разбан")
-    await msg.answer("👑 Админ-панель", reply_markup=kb)
-
-@dp.message(lambda msg: msg.text == "🚨 Пожаловаться")
-async def report(msg: types.Message):
-    await msg.answer("Введите ID поездки и причину через пробел, например: 7 мошенник")
-
-@dp.message()
-async def handle_report(msg: types.Message):
-    if msg.text.count(" ") >= 1:
-        parts = msg.text.split()
-        ride_id = int(parts[0])
-        reason = " ".join(parts[1:])
-        db.cursor.execute("INSERT INTO reports (ride_id, reporter_id, reason) VALUES (?, ?, ?)",
-                          (ride_id, msg.from_user.id, reason))
-        db.conn.commit()
-        await msg.answer("✅ Жалоба отправлена администратору")
-        await bot.send_message(ADMIN_ID, f"🚨 Жалоба на поездку {ride_id} от @{msg.from_user.username}: {reason}")
-
-# ------------------ WEBHOOK ------------------
-async def on_startup(app):
-    webhook_url = f"https://poputka-1.onrender.com/webhook/{TOKEN}"
-    await bot.set_webhook(webhook_url)
-
-async def on_shutdown(app):
-    await bot.delete_webhook()
-
-async def handle(request):
-    update = types.Update(**await request.json())
-    await dp.feed_update(update)
-    return web.Response()
-
-app = web.Application()
-app.router.add_post(f'/webhook/{TOKEN}', handle)
-app.on_startup.append(on_startup)
-app.on_shutdown.append(on_shutdown)
-
-PORT = int(os.environ.get("PORT", 10000))
-
+# ---------------- Запуск ----------------
 if __name__ == "__main__":
-    web.run_app(app, host="0.0.0.0", port=PORT)
+    threading.Thread(target=run_web).start()
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+
+    print("🚀 Бот запущен")
+    app.run_polling()
