@@ -9,8 +9,8 @@ from telegram.ext import (
 )
 
 # ---------------- Настройки ----------------
-ADMIN_ID = 123456789  # твой Telegram ID
-DONATE_URL = "https://t.me/pay"  # ссылка или QR на оплату
+ADMIN_ID = 869818784
+DONATE_URL = "https://t.me/grigelav"  # ссылка или QR на оплату
 BOT_TOKEN = os.environ.get("BOT_TOKEN")  # токен бота через Render Env
 
 # ---------------- Flask ----------------
