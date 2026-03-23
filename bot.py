@@ -205,7 +205,7 @@ async def handle_report(msg: types.Message):
 
 # ------------------ WEBHOOK ------------------
 async def on_startup(app):
-    webhook_url = f"https://ТВОЙ-URL.onrender.com/webhook/{TOKEN}"
+    webhook_url = f"https://poputka-1.onrender.com/webhook/{TOKEN}"
     await bot.set_webhook(webhook_url)
 
 async def on_shutdown(app):
