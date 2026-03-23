@@ -225,7 +225,12 @@ async def my_rides(msg: types.Message):
 
 # --- ЗАПУСК ---
 async def main():
-    await dp.start_polling(bot)
+    # skip_updates=True — пропускаем старые обновления, чтобы не было конфликта
+    await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        import asyncio
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("Бот остановлен")
