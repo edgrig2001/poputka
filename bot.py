@@ -1,13 +1,32 @@
 import os
-import sqlite3
-import threading
-from flask import Flask
+from aiogram import Bot, Dispatcher, types
+from config import TOKEN
+import asyncio
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler,
-    MessageHandler, filters
-)
+bot = Bot(token=TOKEN)
+dp = Dispatcher(bot)
+
+PORT = int(os.environ.get("PORT", 10000))  # Render назначает порт
+
+async def on_startup(dp):
+    webhook_url = f"https://ТВОЙ-URL.onrender.com/webhook"
+    await bot.set_webhook(webhook_url)
+
+async def on_shutdown(dp):
+    await bot.delete_webhook()
+
+if __name__ == "__main__":
+    from aiogram.utils.executor import start_webhook
+
+    start_webhook(
+        dispatcher=dp,
+        webhook_path=f"/webhook/{TOKEN}",
+        on_startup=on_startup,
+        on_shutdown=on_shutdown,
+        skip_updates=True,
+        host="0.0.0.0",
+        port=PORT
+    )
 # --- КНОПКИ ---
 def main_menu():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
