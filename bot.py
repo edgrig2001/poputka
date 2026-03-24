@@ -13,12 +13,13 @@ from telegram.ext import (
     filters
 )
 
+
 # ---------------- НАСТРОЙКИ ----------------
 ADMIN_ID = 869818784  # ВСТАВЬ СВОЙ ID
 DONATE_URL = "https://t.me/grigelav"
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-# ---------------- WEB (Render) ----------------
+# ---------------- WEB ----------------
 web_app = Flask(__name__)
 
 @web_app.route("/")
@@ -58,14 +59,7 @@ CREATE TABLE IF NOT EXISTS ratings (
 """)
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS reports 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    photo TEXT
-)
-""")
-conn.commit() (
+CREATE TABLE IF NOT EXISTS reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ride_id INTEGER,
     reporter_id INTEGER,
@@ -73,10 +67,25 @@ conn.commit() (
 )
 """)
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    photo TEXT
+)
+""")
+
 conn.commit()
 
 # ---------------- STATE ----------------
 user_state = {}
+
+# ---------------- UTILS ----------------
+def get_user_rating(user_id):
+    avg = cursor.execute(
+        "SELECT AVG(rating) FROM ratings WHERE to_user=?",
+        (user_id,)
+    ).fetchone()[0]
+    return round(avg, 1) if avg else 0
 
 # ---------------- МЕНЮ ----------------
 def main_menu(user_id):
@@ -94,13 +103,12 @@ def main_menu(user_id):
 
 # ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat.id
     await update.message.reply_text(
         "🚗 Попутка Челны ↔ Казань",
-        reply_markup=main_menu(chat_id)
+        reply_markup=main_menu(update.message.chat.id)
     )
 
-# ---------------- КНОПКИ СОЗДАНИЯ ----------------
+# ---------------- СОЗДАНИЕ ----------------
 def routes_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Челны → Казань", callback_data="route_1")],
@@ -114,9 +122,7 @@ def seats_kb():
         [InlineKeyboardButton("⬅️ Назад", callback_data="back")]
     ])
 
-# ---------------- СОЗДАНИЕ ПОЕЗДКИ ----------------
-
-async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_start(update, context):
     uid = update.callback_query.from_user.id
     user_state[uid] = {"step": "route"}
     await update.callback_query.edit_message_text(
@@ -124,7 +130,7 @@ async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=routes_kb()
     )
 
-async def set_route(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def set_route(update, context):
     uid = update.callback_query.from_user.id
 
     route = "Челны → Казань" if "1" in update.callback_query.data else "Казань → Челны"
@@ -132,12 +138,12 @@ async def set_route(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state[uid]["route"] = route
     user_state[uid]["step"] = "time"
 
-    await update.callback_query.edit_message_text("Введи время (например 18:30):")
+    await update.callback_query.edit_message_text("Введи время:")
 
-async def set_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def set_time(update, context):
     uid = update.message.chat.id
 
-    if uid not in user_state or user_state[uid].get("step") != "time":
+    if user_state.get(uid, {}).get("step") != "time":
         return
 
     user_state[uid]["time"] = update.message.text
@@ -145,7 +151,7 @@ async def set_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("Сколько мест?", reply_markup=seats_kb())
 
-async def set_seats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def set_seats(update, context):
     uid = update.callback_query.from_user.id
 
     if user_state.get(uid, {}).get("step") != "seats":
@@ -156,9 +162,9 @@ async def set_seats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state[uid]["seats"] = seats
     user_state[uid]["step"] = "price"
 
-    await update.callback_query.edit_message_text("Введи цену (или 'договорная'):")
+    await update.callback_query.edit_message_text("Цена:")
 
-async def set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def set_price(update, context):
     uid = update.message.chat.id
 
     if user_state.get(uid, {}).get("step") != "price":
@@ -167,9 +173,9 @@ async def set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state[uid]["price"] = update.message.text
     user_state[uid]["step"] = "contact"
 
-    await update.message.reply_text("Напиши @ник или номер для связи:")
+    await update.message.reply_text("Контакт:")
 
-async def set_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def set_contact(update, context):
     uid = update.message.chat.id
 
     if user_state.get(uid, {}).get("step") != "contact":
@@ -178,55 +184,37 @@ async def set_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state[uid]["contact"] = update.message.text
     user_state[uid]["step"] = "photo"
 
-    await update.message.reply_text("Отправь фото или /skip")
-
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.chat.id
-
-    if user_state.get(uid, {}).get("step") != "photo":
-        return
-
-    photo_id = update.message.photo[-1].file_id
-    await save_ride(uid, photo_id, context)
-
-async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.chat.id
-
-    if user_state.get(uid, {}).get("step") != "photo":
-        return
-
-    await save_ride(uid, None, context)
+    await update.message.reply_text("Фото или /skip")
 
 async def save_ride(uid, photo, context):
-    data = user_state[uid]
+    d = user_state[uid]
 
     cursor.execute("""
     INSERT INTO rides (user_id, route, time, seats_total, seats_taken, price, photo, contact)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         uid,
-        data["route"],
-        data["time"],
-        data["seats"],
+        d["route"],
+        d["time"],
+        d["seats"],
         0,
-        data["price"],
+        d["price"],
         photo,
-        data["contact"]
+        d["contact"]
     ))
 
     conn.commit()
+    user_state.pop(uid, None)
 
     await context.bot.send_message(
         uid,
         "✅ Поездка создана!",
         reply_markup=main_menu(uid)
     )
-
-    user_state.pop(uid, None)
     
 # ---------------- ПОИСК ----------------
 
-async def find_rides(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def find_rides(update, context):
     uid = update.callback_query.from_user.id
 
     rides = cursor.execute(
@@ -265,7 +253,7 @@ async def find_rides(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- БРОНИРОВАНИЕ ----------------
 
-async def book_seat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def book_seat(update, context):
     uid = update.callback_query.from_user.id
     ride_id = int(update.callback_query.data.split("_")[1])
 
@@ -294,7 +282,6 @@ async def book_seat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.callback_query.from_user
 
-    # уведомление водителю
     await context.bot.send_message(
         driver_id,
         f"📩 Новая бронь!\n"
@@ -305,46 +292,40 @@ async def book_seat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- ПРОФИЛЬ ----------------
 
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def profile(update, context):
     uid = update.callback_query.from_user.id
 
-    avg = get_user_rating(uid)
+    rating = get_user_rating(uid)
 
-    text = f"👤 Профиль\n⭐ Рейтинг: {avg}"
+    text = f"👤 Профиль\n⭐ Рейтинг: {rating}"
 
-    photos = await context.bot.get_user_profile_photos(uid)
-    def get_user_rating(user_id):
-    avg = cursor.execute(
-        "SELECT AVG(rating) FROM ratings WHERE to_user=?",
-        (user_id,)
-    ).fetchone()[0]
+    user_photo = cursor.execute(
+        "SELECT photo FROM users WHERE user_id=?",
+        (uid,)
+    ).fetchone()
 
-    return round(avg, 1) if avg else 0
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📷 Загрузить фото", callback_data="set_photo")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="back")]
+    ])
 
-    if photos.total_count > 0:
-        photo_id = photos.photos[0][0].file_id
-
+    if user_photo and user_photo[0]:
         await context.bot.send_photo(
             uid,
-            photo_id,
+            user_photo[0],
             caption=text,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📷 Загрузить фото", callback_data="set_photo")],
-                [InlineKeyboardButton("⬅️ Назад", callback_data="back")]
-             ])
+            reply_markup=kb
         )
     else:
         await update.callback_query.edit_message_text(
             text,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Назад", callback_data="back")]
-            ])
+            reply_markup=kb
         )
 
 
 # ---------------- МОИ ОБЪЯВЛЕНИЯ ----------------
 
-async def my_rides(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def my_rides(update, context):
     uid = update.callback_query.from_user.id
 
     rides = cursor.execute(
@@ -381,7 +362,7 @@ async def my_rides(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- РЕЙТИНГ ----------------
 
-async def rate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def rate(update, context):
     ride_id = int(update.callback_query.data.split("_")[1])
 
     kb = InlineKeyboardMarkup([
@@ -394,23 +375,17 @@ async def rate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def save_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def save_rating(update, context):
     uid = update.callback_query.from_user.id
 
     _, _, ride_id, rating = update.callback_query.data.split("_")
     ride_id = int(ride_id)
     rating = int(rating)
 
-    driver = cursor.execute(
+    driver_id = cursor.execute(
         "SELECT user_id FROM rides WHERE id=?",
         (ride_id,)
-    ).fetchone()
-
-    if not driver:
-        await update.callback_query.answer("Ошибка")
-        return
-
-    driver_id = driver[0]
+    ).fetchone()[0]
 
     cursor.execute(
         "INSERT INTO ratings (ride_id, from_user, to_user, rating) VALUES (?, ?, ?, ?)",
@@ -418,13 +393,14 @@ async def save_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     conn.commit()
 
-    await update.callback_query.answer("⭐ Оценка сохранена")
     new_rating = get_user_rating(driver_id)
 
     await context.bot.send_message(
-    driver_id,
-    f"⭐ Тебя оценили!\nНовый рейтинг: {new_rating}"
-)
+        driver_id,
+        f"⭐ Тебя оценили!\nНовый рейтинг: {new_rating}"
+    )
+
+    await update.callback_query.answer("⭐ Оценка сохранена")
     await update.callback_query.edit_message_text(
         "Спасибо!",
         reply_markup=main_menu(uid)
@@ -433,43 +409,66 @@ async def save_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- ЖАЛОБЫ ----------------
 
-async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def report(update, context):
     uid = update.callback_query.from_user.id
     ride_id = int(update.callback_query.data.split("_")[1])
 
     user_state[uid] = {"report": ride_id}
-
     await update.callback_query.edit_message_text("Напиши причину жалобы:")
 
 
-async def handle_report_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_report_text(update, context):
     uid = update.message.chat.id
 
-    if uid not in user_state or "report" not in user_state[uid]:
+    if uid in user_state and "report" in user_state[uid]:
+        ride_id = user_state[uid]["report"]
+        reason = update.message.text
+
+        cursor.execute(
+            "INSERT INTO reports (ride_id, reporter_id, reason) VALUES (?, ?, ?)",
+            (ride_id, uid, reason)
+        )
+        conn.commit()
+
+        await update.message.reply_text("🚨 Жалоба отправлена")
+        await context.bot.send_message(
+            ADMIN_ID,
+            f"🚨 Жалоба\nПоездка: {ride_id}\nПричина: {reason}"
+        )
+        user_state.pop(uid, None)
+
+
+# ---------------- ЗАГРУЗКА ФОТО ПРОФИЛЯ ----------------
+
+async def set_profile_photo(update, context):
+    uid = update.callback_query.from_user.id
+    user_state[uid] = {"step": "set_photo"}
+    await update.callback_query.edit_message_text("Отправь фото профиля:")
+
+
+async def handle_profile_photo(update, context):
+    uid = update.message.chat.id
+    if user_state.get(uid, {}).get("step") != "set_photo":
         return
 
-    ride_id = user_state[uid]["report"]
-    reason = update.message.text
+    if update.message.photo:
+        photo_id = update.message.photo[-1].file_id
 
-    cursor.execute(
-        "INSERT INTO reports (ride_id, reporter_id, reason) VALUES (?, ?, ?)",
-        (ride_id, uid, reason)
-    )
-    conn.commit()
+        cursor.execute(
+            "INSERT OR REPLACE INTO users (user_id, photo) VALUES (?, ?)",
+            (uid, photo_id)
+        )
+        conn.commit()
+        user_state.pop(uid, None)
 
-    await update.message.reply_text("🚨 Жалоба отправлена")
-
-    await context.bot.send_message(
-        ADMIN_ID,
-        f"🚨 Жалоба\nПоездка: {ride_id}\nПричина: {reason}"
-    )
-
-    user_state.pop(uid, None)
+        await update.message.reply_text("✅ Фото профиля обновлено", reply_markup=main_menu(uid))
+    else:
+        await update.message.reply_text("❌ Отправь фото!")
 
 
 # ---------------- ПОВЫШЕНИЕ ----------------
 
-async def promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def promote(update, context):
     ride_id = int(update.callback_query.data.split("_")[1])
 
     kb = InlineKeyboardMarkup([
@@ -485,7 +484,9 @@ async def promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- АДМИНКА ----------------
 
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin(update, context):
+    uid = update.callback_query.from_user.id
+
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Все поездки", callback_data="admin_all")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="back")]
@@ -497,20 +498,16 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def admin_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_all(update, context):
     uid = update.callback_query.from_user.id
-
     if uid != ADMIN_ID:
         await update.callback_query.answer("Нет доступа")
         return
 
     rides = cursor.execute("SELECT * FROM rides ORDER BY id DESC").fetchall()
-
     if not rides:
         await update.callback_query.edit_message_text("Нет поездок")
         return
-
-    await update.callback_query.edit_message_text("📋 Все поездки:")
 
     for r in rides:
         await context.bot.send_message(
@@ -521,7 +518,7 @@ async def admin_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- CALLBACK ROUTER ----------------
 
-async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def callbacks(update, context):
     data = update.callback_query.data
 
     if data == "back":
@@ -529,92 +526,82 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Меню",
             reply_markup=main_menu(update.callback_query.from_user.id)
         )
-
     elif data == "add":
         await add_start(update, context)
-
     elif data.startswith("route_"):
         await set_route(update, context)
-
     elif data.startswith("seats_"):
         await set_seats(update, context)
-
     elif data == "find":
         await find_rides(update, context)
-
     elif data.startswith("book_"):
         await book_seat(update, context)
-
     elif data == "profile":
         await profile(update, context)
-
     elif data == "my":
         await my_rides(update, context)
-
     elif data.startswith("rate_send_"):
         await save_rating(update, context)
-
     elif data.startswith("rate_"):
         await rate(update, context)
-
     elif data.startswith("report_"):
         await report(update, context)
-
     elif data.startswith("promote_"):
         await promote(update, context)
-
     elif data == "admin":
         await admin(update, context)
-
     elif data == "admin_all":
         await admin_all(update, context)
-
+    elif data == "set_photo":
+        await set_profile_photo(update, context)
     else:
         await update.callback_query.answer("❗ Неизвестная команда")
 
 
 # ---------------- ОБРАБОТКА СООБЩЕНИЙ ----------------
 
-async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def messages(update, context):
     uid = update.message.chat.id
 
+    # создание поездки
     if uid in user_state:
         state = user_state[uid]
 
         if state.get("step") == "time":
             await set_time(update, context)
             return
-
         elif state.get("step") == "seats":
-            # защита (если вдруг человек пишет вместо кнопки)
             await update.message.reply_text("Выбери кнопкой количество мест")
             return
-
         elif state.get("step") == "price":
             await set_price(update, context)
             return
-
         elif state.get("step") == "contact":
             await set_contact(update, context)
             return
-
         elif state.get("step") == "photo":
-    text = update.message.text or ""
+            text = update.message.text or ""
+            if text.startswith("/skip"):
+                await save_ride(uid, None, context)
+            elif update.message.photo:
+                await handle_photo(update, context)
+            else:
+                await update.message.reply_text("Отправь фото или напиши /skip")
+            return
+        elif state.get("step") == "set_photo":
+            await handle_profile_photo(update, context)
+            return
 
-        if text.startswith("/skip"):
-           await skip_photo(update, context)
-        elif update.message.photo:
-           await handle_photo(update, context)
-        else:
-           await update.message.reply_text("Отправь фото или напиши /skip")
     # жалобы
-           await handle_report_text(update, context)
-# если не в состоянии и не жалоба
-       if uid not in user_state:
-           await update.message.reply_text(
-        "Используй меню 👇",
-        reply_markup=main_menu(uid)
-    )
+    await handle_report_text(update, context)
+
+    # если ничего не в процессе
+    if uid not in user_state:
+        await update.message.reply_text(
+            "Используй меню 👇",
+            reply_markup=main_menu(uid)
+        )
+
 
 # ---------------- ЗАПУСК ----------------
 
@@ -622,7 +609,6 @@ if __name__ == "__main__":
     threading.Thread(target=run_web).start()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callbacks))
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, messages))
