@@ -602,7 +602,7 @@ async def callbacks(update, context):
         await mini_game(update, context)
     else:
         await update.callback_query.answer("❗ Неизвестная команда")
-Часть 5.4: Обработка сообщений
+# Часть 5.4: Обработка сообщений
 # ---------------- ОБРАБОТКА СООБЩЕНИЙ ----------------
 async def messages(update, context):
     uid = update.message.chat.id
