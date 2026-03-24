@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS rides (
     seats_total INTEGER,
     seats_taken INTEGER DEFAULT 0,
     price TEXT,
-    photo TEXT
+    photo TEXT,
+    contact TEXT
 )
 """)
 
@@ -49,7 +50,8 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS ratings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ride_id INTEGER,
-    user_id INTEGER,
+    from_user INTEGER,
+    to_user INTEGER,
     rating INTEGER
 )
 """)
@@ -154,6 +156,8 @@ async def set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_state.get(uid, {}).get("step") != "price":
         return
+user_state[uid]["step"] = "contact"
+await update.message.reply_text("Напиши @никнейм или номер для связи:")
 
     user_state[uid]["price"] = update.message.text
     user_state[uid]["step"] = "photo"
@@ -183,9 +187,9 @@ async def save_ride(uid, photo, context):
     data = user_state[uid]
 
     cursor.execute("""
-        INSERT INTO rides (user_id, route, time, seats_total, price, photo)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (uid, data["route"], data["time"], data["seats"], data["price"], photo))
+       INSERT INTO rides (user_id, route, time, seats_total, price, photo, contact)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (uid, ..., photo, data["contact"])
 
     conn.commit()
 
@@ -256,7 +260,12 @@ async def book_seat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📩 У вас новая бронь! Поездка ID {ride_id}"
     )
 # ---------------- ПРОФИЛЬ ----------------
+photos = await context.bot.get_user_profile_photos(uid)
 
+if photos.total_count > 0:
+    photo_id = photos.photos[0][0].file_id
+else:
+    photo_id = None
 async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.callback_query.from_user.id
 
@@ -269,13 +278,22 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = f"👤 Профиль\n⭐ Рейтинг: {avg}"
 
+   if photo_id:
+    await context.bot.send_photo(
+        uid,
+        photo_id,
+        caption=text,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Назад", callback_data="back")]
+        ])
+    )
+else:
     await update.callback_query.edit_message_text(
         text,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("⬅️ Назад", callback_data="back")]
         ])
     )
-
 
 # ---------------- МОИ ОБЪЯВЛЕНИЯ ----------------
 
@@ -300,7 +318,12 @@ async def my_rides(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("💰 Повысить", callback_data=f"promote_{r[0]}")]
         ])
 
-        await context.bot.send_message(uid, text, reply_markup=kb)
+       user = update.callback_query.from_user
+
+await context.bot.send_message(
+    driver_id,
+    f"📩 Бронь!\n👤 @{user.username}\nID: {user.id}"
+)
 
 
 # ---------------- РЕЙТИНГ ----------------
@@ -323,10 +346,19 @@ async def save_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ride_id = int(ride_id)
     rating = int(rating)
 
-    cursor.execute(
-        "INSERT INTO ratings (ride_id, user_id, rating) VALUES (?, ?, ?)",
-        (ride_id, uid, rating)
-    )
+# находим владельца поездки
+driver_id = cursor.execute(
+    "SELECT user_id FROM rides WHERE id=?",
+    (ride_id,)
+).fetchone()[0]
+
+# если водитель оценивает → значит оценивает пассажира (пока пропустим)
+# если обычный пользователь → оценивает водителя
+
+cursor.execute(
+    "INSERT INTO ratings (ride_id, from_user, to_user, rating) VALUES (?, ?, ?, ?)",
+    (ride_id, uid, driver_id, rating)
+)
     conn.commit()
 
     await update.callback_query.answer("⭐ Оценка сохранена")
