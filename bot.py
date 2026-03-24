@@ -186,7 +186,7 @@ async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def save_ride(uid, photo, context):
     data = user_state[uid]
 
-    cursor.execute("""
+    cursor.execute(""")
        INSERT INTO rides (user_id, route, time, seats_total, price, photo, contact)
 VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (uid, ..., photo, data["contact"])
