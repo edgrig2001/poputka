@@ -446,7 +446,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     else:
         await update.callback_query.answer("❗ Неизвестная команда")
-      async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.chat.id
 
     # создание поездки
