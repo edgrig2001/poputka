@@ -668,7 +668,13 @@ def home():
 def run_web():
     port = int(os.environ.get("PORT", 10000))
     web_app.run(host="0.0.0.0", port=port)
-
+# ---------------- /start ----------------
+async def start(update, context):
+    uid = update.message.chat.id
+    await update.message.reply_text(
+        "Привет! Используй меню 👇",
+        reply_markup=main_menu(uid)
+    )
 # ---------------- ЗАПУСК ----------------
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
