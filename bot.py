@@ -162,7 +162,7 @@ await update.message.reply_text("Напиши @никнейм или номер 
 user_state[uid]["price"] = "update.message.text"
 user_state[uid]["step"] = "photo"
 
-    await update.message.reply_text("Отправь фото или /skip")
+await update.message.reply_text("Отправь фото или /skip")
 
 # фото или пропуск
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
