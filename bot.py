@@ -50,47 +50,6 @@ conn.commit()
 
 # ---------------- Состояния пользователей ----------------
 user_state = {}  # user_id -> {"add_ride": {...}, "rating": {...}, "report": {...}} 
-# ---------------- SQLite ----------------
-conn = sqlite3.connect("rides.db", check_same_thread=False)
-cursor = conn.cursor()
-
-# Таблица поездок
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS rides (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    route TEXT,
-    time TEXT,
-    seats_total INTEGER,
-    seats_taken INTEGER DEFAULT 0,
-    price TEXT,
-    photo TEXT
-)
-""")
-
-# Таблица рейтингов
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS ratings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ride_id INTEGER,
-    user_id INTEGER,
-    rating INTEGER
-)
-""")
-
-# Таблица жалоб
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS reports (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ride_id INTEGER,
-    reporter_id INTEGER,
-    reason TEXT
-)
-""")
-conn.commit()
-
-# ---------------- Состояния пользователей ----------------
-user_state = {}  # user_id -> {"add_ride": {...}, "rating": {...}, "report": {...}} 
 # ---------------- Главное меню ----------------
 def main_menu(user_id):
     kb = InlineKeyboardMarkup([
