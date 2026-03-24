@@ -159,7 +159,7 @@ async def set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 user_state[uid]["step"] = "contact"
 await update.message.reply_text("Напиши @никнейм или номер для связи:")
 
-    user_state[uid]["price"] = update.message.text
+    user_state[uid]["price"] = "update.message.text"
     user_state[uid]["step"] = "photo"
 
     await update.message.reply_text("Отправь фото или /skip")
