@@ -1,4 +1,17 @@
+from flask import Flask
+import threading
 import os
+
+web_app = Flask(__name__)
+
+@web_app.route("/")
+def home():
+    return "OK"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
+    import os
 import sqlite3
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
@@ -312,18 +325,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 # ---------------- ЗАПУСК ----------------
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+from flask import Flask
+import threading
+import os
 
-    # Команды
-    app.add_handler(CommandHandler("start", start))
+web_app = Flask(__name__)
 
-    # CallbackQuery
-    app.add_handler(CallbackQueryHandler(callback_handler))
+@web_app.route("/")
+def home():
+    return "OK"
 
-    # Сообщения (ввод времени, цены, фото, жалобы)
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
-    app.add_handler(MessageHandler(filters.PHOTO, message_handler))
-
-    print("✅ BOT STARTED")
-    app.run_polling(close_loop=False)
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
