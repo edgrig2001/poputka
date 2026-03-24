@@ -652,3 +652,31 @@ async def messages(update, context):
             "Используй меню 👇",
             reply_markup=main_menu(uid)
         )
+# ---------------- WEB ----------------
+from flask import Flask
+import threading
+import os
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+
+web_app = Flask(__name__)
+
+@web_app.route("/")
+def home():
+    return "OK"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
+
+# ---------------- ЗАПУСК ----------------
+if __name__ == "__main__":
+    threading.Thread(target=run_web).start()
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(callbacks))
+    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, messages))
+
+    print("✅ BOT STARTED")
+    app.run_polling(close_loop=False)
