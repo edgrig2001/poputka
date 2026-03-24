@@ -14,8 +14,8 @@ from telegram.ext import (
 )
 
 # ---------------- НАСТРОЙКИ ----------------
-ADMIN_ID = 123456789  # ВСТАВЬ СВОЙ ID
-DONATE_URL = "https://t.me/yourlink"
+ADMIN_ID = 869818784  # ВСТАВЬ СВОЙ ID
+DONATE_URL = "https://t.me/grigelav"
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 # ---------------- WEB (Render) ----------------
@@ -58,7 +58,14 @@ CREATE TABLE IF NOT EXISTS ratings (
 """)
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS reports (
+CREATE TABLE IF NOT EXISTS reports 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    photo TEXT
+)
+""")
+conn.commit() (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ride_id INTEGER,
     reporter_id INTEGER,
@@ -301,16 +308,18 @@ async def book_seat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.callback_query.from_user.id
 
-    avg = cursor.execute(
-        "SELECT AVG(rating) FROM ratings WHERE to_user=?",
-        (uid,)
-    ).fetchone()[0]
-
-    avg = round(avg, 1) if avg else 0
+    avg = get_user_rating(uid)
 
     text = f"👤 Профиль\n⭐ Рейтинг: {avg}"
 
     photos = await context.bot.get_user_profile_photos(uid)
+    def get_user_rating(user_id):
+    avg = cursor.execute(
+        "SELECT AVG(rating) FROM ratings WHERE to_user=?",
+        (user_id,)
+    ).fetchone()[0]
+
+    return round(avg, 1) if avg else 0
 
     if photos.total_count > 0:
         photo_id = photos.photos[0][0].file_id
@@ -320,8 +329,9 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo_id,
             caption=text,
             reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📷 Загрузить фото", callback_data="set_photo")],
                 [InlineKeyboardButton("⬅️ Назад", callback_data="back")]
-            ])
+             ])
         )
     else:
         await update.callback_query.edit_message_text(
@@ -409,7 +419,12 @@ async def save_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
 
     await update.callback_query.answer("⭐ Оценка сохранена")
+    new_rating = get_user_rating(driver_id)
 
+    await context.bot.send_message(
+    driver_id,
+    f"⭐ Тебя оценили!\nНовый рейтинг: {new_rating}"
+)
     await update.callback_query.edit_message_text(
         "Спасибо!",
         reply_markup=main_menu(uid)
@@ -584,17 +599,22 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         elif state.get("step") == "photo":
-            if update.message.text == "/skip":
-                await skip_photo(update, context)
-            elif update.message.photo:
-                await handle_photo(update, context)
-            else:
-                await update.message.reply_text("Отправь фото или /skip")
-            return
+    text = update.message.text or ""
 
+        if text.startswith("/skip"):
+           await skip_photo(update, context)
+        elif update.message.photo:
+           await handle_photo(update, context)
+        else:
+           await update.message.reply_text("Отправь фото или напиши /skip")
     # жалобы
-    await handle_report_text(update, context)
-
+           await handle_report_text(update, context)
+# если не в состоянии и не жалоба
+       if uid not in user_state:
+           await update.message.reply_text(
+        "Используй меню 👇",
+        reply_markup=main_menu(uid)
+    )
 
 # ---------------- ЗАПУСК ----------------
 
