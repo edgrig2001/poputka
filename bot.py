@@ -3,7 +3,6 @@ import sqlite3
 import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler
-)
 # ---------------- Настройки ----------------
 ADMIN_ID = 869818784
 DONATE_URL = "https://t.me/grigelav"  # ссылка или QR на оплату
